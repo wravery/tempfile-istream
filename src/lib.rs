@@ -17,8 +17,10 @@ use windows::{
         },
         System::{
             Com::{
-                CoTaskMemAlloc, IStream,
-                StructuredStorage::{STATFLAG_DEFAULT, STATFLAG_NONAME, STGC, STGM_READWRITE},
+                CoTaskMemAlloc, ISequentialStream_Impl, IStream, IStream_Impl,
+                StructuredStorage::{
+                    STATFLAG, STATFLAG_DEFAULT, STATFLAG_NONAME, STGC, STGM_READWRITE,
+                },
                 STATSTG, STGTY_STREAM, STREAM_SEEK, STREAM_SEEK_CUR, STREAM_SEEK_END,
                 STREAM_SEEK_SET,
             },
@@ -27,38 +29,27 @@ use windows::{
     },
 };
 
-use windows_macros::implement;
+use windows_implement::implement;
 
 #[implement(Windows::Win32::System::Com::IStream)]
 pub struct TempFileStream(Mutex<File>);
 
 #[allow(non_snake_case)]
-impl TempFileStream {
-    pub fn new() -> Result<Self> {
-        Ok(Self(Mutex::new(map_io_err(tempfile::tempfile())?)))
-    }
-
-    pub fn with_bytes(content: &[u8]) -> Result<Self> {
-        let mut file = map_io_err(tempfile::tempfile())?;
-        map_io_err(file.write(content))?;
-        map_io_err(file.seek(SeekFrom::Start(0)))?;
-        Ok(Self(Mutex::new(file)))
-    }
-
-    fn Read(&self, pv: *mut c_void, cb: u32, pcbRead: *mut u32) -> Result<()> {
+impl ISequentialStream_Impl for TempFileStream {
+    fn Read(&mut self, pv: *mut c_void, cb: u32, pcbread: *mut u32) -> Result<()> {
         Self::check_buffer(pv)?;
         let mut file = self.get_file()?;
         unsafe {
             let buf: *mut [u8] = ptr::slice_from_raw_parts_mut(mem::transmute(pv), cb as usize);
             let cbRead = map_io_err(file.read(&mut *buf))? as u32;
-            if !pcbRead.is_null() {
-                *pcbRead = cbRead;
+            if !pcbread.is_null() {
+                *pcbread = cbRead;
             }
         }
         Ok(())
     }
 
-    fn Write(&self, pv: *const c_void, cb: u32) -> Result<u32> {
+    fn Write(&mut self, pv: *const c_void, cb: u32) -> Result<u32> {
         Self::check_buffer(pv)?;
         let mut file = self.get_file()?;
         Ok(unsafe {
@@ -66,8 +57,11 @@ impl TempFileStream {
             map_io_err(file.write(&*buf))?
         } as u32)
     }
+}
 
-    fn Seek(&self, dlibmove: i64, dworigin: STREAM_SEEK) -> Result<u64> {
+#[allow(non_snake_case)]
+impl IStream_Impl for TempFileStream {
+    fn Seek(&mut self, dlibmove: i64, dworigin: STREAM_SEEK) -> Result<u64> {
         let mut file = self.get_file()?;
         let pos = match dworigin {
             STREAM_SEEK_SET => Result::Ok(SeekFrom::Start(dlibmove as u64)),
@@ -78,13 +72,13 @@ impl TempFileStream {
         Ok(map_io_err(file.seek(pos))? as u64)
     }
 
-    fn SetSize(&self, libnewsize: u64) -> Result<()> {
+    fn SetSize(&mut self, libnewsize: u64) -> Result<()> {
         let file = self.get_file()?;
         map_io_err(file.set_len(libnewsize))
     }
 
     fn CopyTo(
-        &self,
+        &mut self,
         pstm: &Option<IStream>,
         cb: u64,
         pcbread: *mut u64,
@@ -125,38 +119,38 @@ impl TempFileStream {
         result
     }
 
-    fn Commit(&self, _grfcommitflags: STGC) -> Result<()> {
+    fn Commit(&mut self, _grfcommitflags: STGC) -> Result<()> {
         let mut file = self.get_file()?;
         map_io_err(file.flush())
     }
 
-    fn Revert(&self) -> Result<()> {
+    fn Revert(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn LockRegion(&self, _liboffset: u64, _cb: u64, _dwlocktype: u32) -> Result<()> {
+    fn LockRegion(&mut self, _liboffset: u64, _cb: u64, _dwlocktype: u32) -> Result<()> {
         Err(STG_E_INVALIDFUNCTION.into())
     }
 
-    fn UnlockRegion(&self, _liboffset: u64, _cb: u64, _dwlocktype: u32) -> Result<()> {
+    fn UnlockRegion(&mut self, _liboffset: u64, _cb: u64, _dwlocktype: u32) -> Result<()> {
         Err(STG_E_INVALIDFUNCTION.into())
     }
 
-    fn Stat(&self, pstatstg: *mut STATSTG, grfstatflag: u32) -> Result<()> {
+    fn Stat(&mut self, pstatstg: *mut STATSTG, grfstatflag: u32) -> Result<()> {
         Self::check_buffer(pstatstg)?;
         unsafe {
-            (*pstatstg).pwcsName = pwstr_from_str(match grfstatflag as i32 {
+            (*pstatstg).pwcsName = pwstr_from_str(match STATFLAG(grfstatflag as i32) {
                 STATFLAG_DEFAULT => Result::Ok("tempfile"),
                 STATFLAG_NONAME => Result::Ok(""),
                 _ => Err(STG_E_INVALIDFLAG.into()),
             }?);
-            (*pstatstg).r#type = STGTY_STREAM as u32;
+            (*pstatstg).r#type = STGTY_STREAM.0 as u32;
             let metadata = map_io_err(self.get_file()?.metadata())?;
             (*pstatstg).cbSize = metadata.len();
             (*pstatstg).mtime = filetime_from_systemtime(map_io_err(metadata.modified())?)?;
             (*pstatstg).ctime = filetime_from_systemtime(map_io_err(metadata.created())?)?;
             (*pstatstg).atime = filetime_from_systemtime(map_io_err(metadata.accessed())?)?;
-            (*pstatstg).grfMode = STGM_READWRITE;
+            (*pstatstg).grfMode = STGM_READWRITE.0;
             (*pstatstg).grfLocksSupported = 0;
             (*pstatstg).clsid = GUID::zeroed();
             (*pstatstg).grfStateBits = 0;
@@ -164,7 +158,7 @@ impl TempFileStream {
         Ok(())
     }
 
-    fn Clone(&self) -> Result<IStream> {
+    fn Clone(&mut self) -> Result<IStream> {
         let mut src_file = self.get_file()?;
         let src_pos = SeekFrom::Start(map_io_err(src_file.stream_position())?);
         let dest = Self::new()?;
@@ -187,6 +181,19 @@ impl TempFileStream {
         map_io_err(src_file.seek(src_pos))?;
         result?;
         Ok(dest.into())
+    }
+}
+
+impl TempFileStream {
+    pub fn new() -> Result<Self> {
+        Ok(Self(Mutex::new(map_io_err(tempfile::tempfile())?)))
+    }
+
+    pub fn with_bytes(content: &[u8]) -> Result<Self> {
+        let mut file = map_io_err(tempfile::tempfile())?;
+        map_io_err(file.write(content))?;
+        map_io_err(file.seek(SeekFrom::Start(0)))?;
+        Ok(Self(Mutex::new(file)))
     }
 
     fn get_file(&self) -> Result<MutexGuard<File>> {

@@ -8,13 +8,14 @@ license = "MIT"
 categories = [ "os::windows-apis" ]
 
 [dependencies]
-windows_macros = "0.30.0"
+windows-implement = "0.32.0"
 tempfile = "3.3.0"
 
 [dependencies.windows]
-version = "0.30.0"
+version = "0.32.0"
 features = [
     "alloc",
+    "implement",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",
