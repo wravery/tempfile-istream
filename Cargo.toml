@@ -1,6 +1,6 @@
 [package]
 name = "tempfile-istream"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Implement IStream on an exclusive temp file which is deleted on release"
 repository = "https://github.com/wravery/tempfile-istream"
@@ -12,11 +12,8 @@ version = "0.30.0"
 features = [
     "alloc",
     "Win32_Foundation",
-    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
-    "Win32_System_Ole",
-    "Win32_System_Time",
     "Win32_UI_Shell",
 ]
