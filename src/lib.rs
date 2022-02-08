@@ -23,8 +23,8 @@ pub fn new_stream(prefix: &str) -> Result<IStream> {
         GetTempFileNameW(PWSTR(dir.as_mut_ptr()), prefix, 0, PWSTR(file.as_mut_ptr()));
         SHCreateStreamOnFileEx(
             PWSTR(file.as_mut_ptr()),
-            STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
-            FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+            (STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE).0,
+            (FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE).0,
             true,
             None,
         )?

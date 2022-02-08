@@ -1,6 +1,6 @@
 [package]
 name = "tempfile-istream"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Implement IStream on an exclusive temp file which is deleted on release"
 repository = "https://github.com/wravery/tempfile-istream"
@@ -8,7 +8,7 @@ license = "MIT"
 categories = [ "os::windows-apis" ]
 
 [dependencies.windows]
-version = "0.30.0"
+version = "0.32.0"
 features = [
     "alloc",
     "Win32_Foundation",
