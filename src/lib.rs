@@ -1,7 +1,7 @@
 use windows::{
     core::Result,
     Win32::{
-        Foundation::{MAX_PATH, PWSTR},
+        Foundation::{ERROR_BUFFER_OVERFLOW, E_OUTOFMEMORY, MAX_PATH, PWSTR},
         Storage::FileSystem::{
             GetTempFileNameW, GetTempPathW, FILE_ATTRIBUTE_TEMPORARY, FILE_FLAG_DELETE_ON_CLOSE,
         },
@@ -14,31 +14,67 @@ use windows::{
     },
 };
 
-pub fn new_stream(prefix: &str) -> Result<IStream> {
-    const PATH_LEN: usize = (MAX_PATH + 1) as usize;
-    let mut dir = [0_u16; PATH_LEN];
-    let mut file = [0_u16; PATH_LEN];
-    Ok(unsafe {
-        GetTempPathW(dir.len() as u32, PWSTR(dir.as_mut_ptr()));
-        GetTempFileNameW(PWSTR(dir.as_mut_ptr()), prefix, 0, PWSTR(file.as_mut_ptr()));
-        SHCreateStreamOnFileEx(
-            PWSTR(file.as_mut_ptr()),
-            (STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE).0,
-            (FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE).0,
-            true,
-            None,
-        )?
-    })
+pub struct Builder<'a> {
+    prefix: &'a str,
+    content: Option<&'a [u8]>,
 }
 
-pub fn new_stream_with_bytes(prefix: &str, content: &[u8]) -> Result<IStream> {
-    let stream = new_stream(prefix)?;
-    unsafe {
-        stream.Write(std::mem::transmute(content.as_ptr()), content.len() as u32)?;
-        stream.Seek(0, STREAM_SEEK_SET)?;
+impl<'a> Builder<'a> {
+    pub fn new(prefix: &'a str) -> Self {
+        Self {
+            prefix,
+            content: None,
+        }
     }
-    Ok(stream)
+
+    pub fn with_content(self, content: &'a [u8]) -> Self {
+        Self {
+            content: Some(content),
+            ..self
+        }
+    }
+
+    pub fn build(self) -> Result<IStream> {
+        const PATH_LEN: usize = (MAX_PATH + 1) as usize;
+        let mut dir = [0_u16; PATH_LEN];
+        let mut file = [0_u16; PATH_LEN];
+        let stream = unsafe {
+            match GetTempPathW(dir.len() as u32, PWSTR(dir.as_mut_ptr())) {
+                len if len as usize > dir.len() => Result::Err(E_OUTOFMEMORY.into()),
+                _ => Ok(()),
+            }?;
+            match GetTempFileNameW(
+                PWSTR(dir.as_mut_ptr()),
+                self.prefix,
+                0,
+                PWSTR(file.as_mut_ptr()),
+            ) {
+                unique if unique == ERROR_BUFFER_OVERFLOW.0 || unique == 0 => {
+                    Result::Err(E_OUTOFMEMORY.into())
+                }
+                _ => Ok(()),
+            }?;
+
+            SHCreateStreamOnFileEx(
+                PWSTR(file.as_mut_ptr()),
+                (STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE).0,
+                (FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE).0,
+                true,
+                None,
+            )?
+        };
+
+        if let Some(content) = self.content {
+            unsafe {
+                stream.Write(std::mem::transmute(content.as_ptr()), content.len() as u32)?;
+                stream.Seek(0, STREAM_SEEK_SET)?;
+            }
+        }
+
+        Ok(stream)
+    }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,13 +85,15 @@ mod tests {
 
     #[test]
     fn new_tempfile_stream() {
-        new_stream(TEST_PREFIX).expect("create tempfile");
+        Builder::new(TEST_PREFIX).build().expect("create tempfile");
     }
 
     #[test]
     fn with_bytes_and_read() {
         let text = b"with_bytes_and_read";
-        let stream: IStream = new_stream_with_bytes(TEST_PREFIX, text)
+        let stream: IStream = Builder::new(TEST_PREFIX)
+            .with_content(text)
+            .build()
             .expect("create tempfile")
             .into();
         let mut buf = Vec::new();
@@ -77,7 +115,10 @@ mod tests {
     #[test]
     fn write_and_read() {
         let text = b"write_and_read";
-        let stream: IStream = new_stream(TEST_PREFIX).expect("create tempfile").into();
+        let stream: IStream = Builder::new(TEST_PREFIX)
+            .build()
+            .expect("create tempfile")
+            .into();
         let write_len = unsafe { stream.Write(mem::transmute(text.as_ptr()), text.len() as u32) }
             .expect("write bytes") as usize;
         assert_eq!(write_len, text.len());
