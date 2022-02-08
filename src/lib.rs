@@ -55,7 +55,9 @@ mod tests {
     #[test]
     fn with_bytes_and_read() {
         let text = b"with_bytes_and_read";
-        let stream: IStream = new_stream_with_bytes(TEST_PREFIX, text).expect("create tempfile").into();
+        let stream: IStream = new_stream_with_bytes(TEST_PREFIX, text)
+            .expect("create tempfile")
+            .into();
         let mut buf = Vec::new();
         buf.resize(text.len() + 1, 0_u8);
         let mut read_len = 0;
