@@ -1,7 +1,9 @@
+use std::{ffi::OsStr, path::Path};
+
 use windows::{
     core::Result,
     Win32::{
-        Foundation::{ERROR_BUFFER_OVERFLOW, E_OUTOFMEMORY, MAX_PATH, PWSTR},
+        Foundation::{ERROR_BUFFER_OVERFLOW, E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, MAX_PATH, PWSTR},
         Storage::FileSystem::{
             GetTempFileNameW, GetTempPathW, FILE_ATTRIBUTE_TEMPORARY, FILE_FLAG_DELETE_ON_CLOSE,
         },
@@ -14,12 +16,55 @@ use windows::{
     },
 };
 
+/// Builder for a read/write implementation of the [`windows`] crate's [`IStream`] interface
+/// backed by a temp file on disk. The temp file is created with [`SHCreateStreamOnFileEx`], using
+/// [`FILE_ATTRIBUTE_TEMPORARY`] and [`FILE_FLAG_DELETE_ON_CLOSE`] so it will be deleted by the OS
+/// as soon as the last reference to the [`IStream`] is dropped.
+///
+/// # Example
+///
+/// ```
+/// use tempfile_istream::Builder;
+///
+/// let stream = Builder::new("prefix")
+///     .with_content(b"binary content")
+///     .build()
+///     .expect("creates the stream");
+/// ```
 pub struct Builder<'a> {
     prefix: &'a str,
     content: Option<&'a [u8]>,
 }
 
 impl<'a> Builder<'a> {
+    /// Create a new [`Builder`] for an empty [`IStream`] backed by a temp file on disk with the
+    /// specified filename prefix. Only the first 3 characters of the [`prefix`] parameter will
+    /// be used in the filename, but the entire string must match a valid [`std::path::Path`]
+    /// `file_stem` or the call to `build` will fail.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use windows::Win32::System::Com::STREAM_SEEK_END;
+    /// use tempfile_istream::Builder;
+    ///
+    /// let stream = Builder::new("prefix")
+    ///     .build()
+    ///     .expect("creates an empty stream");
+    ///
+    /// let end_pos = unsafe {
+    ///     stream.Seek(0, STREAM_SEEK_END)
+    /// }
+    /// .expect("end position");
+    ///
+    /// assert_eq!(0, end_pos, "stream should be empty");
+    /// ```
+    ///
+    /// # See also
+    ///
+    /// Parameter
+    /// [requirements](https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-gettempfilenamew#parameters)
+    /// for the `prefix` argument.
     pub fn new(prefix: &'a str) -> Self {
         Self {
             prefix,
@@ -27,6 +72,36 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Initialize the stream with a [`u8`] slice of bytes and leave the [`IStream`] cursor at the
+    /// beginning of the stream so that a consumer can immediately begin reading it back.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::mem;
+    /// use tempfile_istream::Builder;
+    ///
+    /// const CONTENT: &[u8] = b"binary content";
+    /// const CONTENT_LEN: usize = CONTENT.len();
+    ///
+    /// let stream = Builder::new("prefix")
+    ///     .with_content(CONTENT)
+    ///     .build()
+    ///     .expect("creates a stream with content");
+    ///
+    /// let mut buf = [0_u8; CONTENT_LEN];
+    /// let mut read_len = 0;
+    /// unsafe {
+    ///     stream.Read(
+    ///         mem::transmute(buf.as_mut_ptr()),
+    ///         buf.len() as u32,
+    ///         &mut read_len,
+    ///     )
+    /// }
+    /// .expect("read bytes");
+    ///
+    /// assert_eq!(buf, CONTENT, "should match the initial content");
+    /// ```
     pub fn with_content(self, content: &'a [u8]) -> Self {
         Self {
             content: Some(content),
@@ -34,10 +109,56 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Create the [`IStream`] backed by a temp file. This will perform parameter validation
+    /// on the `prefix` argument and fail with [`E_INVALIDARG`] if it contains anything other
+    /// than a valid [`std::path::Path`] `file_stem`. Only the first 3 characters of the `prefix`
+    /// will be used.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use windows::Win32::System::Com::{STREAM_SEEK_CUR, STREAM_SEEK_END};
+    /// use tempfile_istream::Builder;
+    ///
+    /// const CONTENT: &[u8] = b"binary content";
+    ///
+    /// let stream = Builder::new("prefix")
+    ///     .with_content(CONTENT)
+    ///     .build()
+    ///     .expect("creates a non-empty stream");
+    ///
+    /// let cur_pos = unsafe {
+    ///     stream.Seek(0, STREAM_SEEK_CUR)
+    /// }
+    /// .expect("current position");
+    ///
+    /// assert_eq!(0, cur_pos, "current position should be at the beginning");
+    ///
+    /// let end_pos = unsafe {
+    ///     stream.Seek(0, STREAM_SEEK_END)
+    /// }
+    /// .expect("end position");
+    ///
+    /// assert_eq!(end_pos as usize, CONTENT.len(), "end position should match content length")
+    /// ```
+    ///
+    /// # See also
+    ///
+    /// Parameter
+    /// [requirements](https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-gettempfilenamew#parameters)
+    /// for the `prefix` argument.
     pub fn build(self) -> Result<IStream> {
-        const PATH_LEN: usize = (MAX_PATH + 1) as usize;
-        let mut dir = [0_u16; PATH_LEN];
-        let mut file = [0_u16; PATH_LEN];
+        if !self.prefix.is_empty()
+            && Path::new(self.prefix).file_stem() != Some(OsStr::new(self.prefix))
+        {
+            return Err(E_INVALIDARG.into());
+        }
+
+        const FILE_LEN: usize = (MAX_PATH + 1) as usize;
+        const DIR_LEN: usize = FILE_LEN - 14;
+        let mut dir = [0_u16; DIR_LEN];
+        let mut file = [0_u16; FILE_LEN];
+
         let stream = unsafe {
             match GetTempPathW(dir.len() as u32, PWSTR(dir.as_mut_ptr())) {
                 len if len as usize > dir.len() => Result::Err(E_OUTOFMEMORY.into()),
@@ -49,9 +170,8 @@ impl<'a> Builder<'a> {
                 0,
                 PWSTR(file.as_mut_ptr()),
             ) {
-                unique if unique == ERROR_BUFFER_OVERFLOW.0 || unique == 0 => {
-                    Result::Err(E_OUTOFMEMORY.into())
-                }
+                unique if unique == ERROR_BUFFER_OVERFLOW.0 => Result::Err(E_OUTOFMEMORY.into()),
+                0 => Result::Err(E_FAIL.into()),
                 _ => Ok(()),
             }?;
 
@@ -81,7 +201,7 @@ mod tests {
     use std::mem;
     use windows::Win32::System::Com::{IStream, STREAM_SEEK_SET};
 
-    const TEST_PREFIX: &'static str = "tfi";
+    const TEST_PREFIX: &'static str = "test";
 
     #[test]
     fn new_tempfile_stream() {
