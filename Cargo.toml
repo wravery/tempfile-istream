@@ -1,6 +1,6 @@
 [package]
 name = "tempfile-istream"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 description = "Implement IStream on an exclusive temp file which is deleted on release"
 repository = "https://github.com/wravery/tempfile-istream"
