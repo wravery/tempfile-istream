@@ -1,6 +1,6 @@
 [package]
 name = "tempfile-istream"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Implement IStream on an exclusive temp file which is deleted on release"
 repository = "https://github.com/wravery/tempfile-istream"
@@ -17,3 +17,6 @@ features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_UI_Shell",
 ]
+
+[package.metadata.docs.rs]
+targets = ["x86_64-pc-windows-msvc", "i686-pc-windows-msvc"]
