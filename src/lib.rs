@@ -1,9 +1,9 @@
 use std::{ffi::OsStr, path::Path};
 
 use windows::{
-    core::Result,
+    core::{Result, PCWSTR, PWSTR},
     Win32::{
-        Foundation::{ERROR_BUFFER_OVERFLOW, E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, MAX_PATH, PWSTR},
+        Foundation::{ERROR_BUFFER_OVERFLOW, E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, MAX_PATH},
         Storage::FileSystem::{
             GetTempFileNameW, GetTempPathW, FILE_ATTRIBUTE_TEMPORARY, FILE_FLAG_DELETE_ON_CLOSE,
         },
@@ -165,7 +165,7 @@ impl<'a> Builder<'a> {
                 _ => Ok(()),
             }?;
             match GetTempFileNameW(
-                PWSTR(dir.as_mut_ptr()),
+                PCWSTR(dir.as_ptr()),
                 self.prefix,
                 0,
                 PWSTR(file.as_mut_ptr()),
@@ -176,7 +176,7 @@ impl<'a> Builder<'a> {
             }?;
 
             SHCreateStreamOnFileEx(
-                PWSTR(file.as_mut_ptr()),
+                PCWSTR(file.as_ptr()),
                 (STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE).0,
                 (FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE).0,
                 true,
