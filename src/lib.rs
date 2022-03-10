@@ -38,7 +38,7 @@ pub struct Builder<'a> {
 
 impl<'a> Builder<'a> {
     /// Create a new [`Builder`] for an empty [`IStream`] backed by a temp file on disk with the
-    /// specified filename prefix. Only the first 3 characters of the [`prefix`] parameter will
+    /// specified filename prefix. Only the first 3 characters of the `prefix` parameter will
     /// be used in the filename, but the entire string must match a valid [`std::path::Path`]
     /// `file_stem` or the call to `build` will fail.
     ///
