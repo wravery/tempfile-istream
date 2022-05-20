@@ -1,7 +1,7 @@
-use std::{ffi::OsStr, path::Path};
+use std::{ffi::OsStr, mem::MaybeUninit, path::Path};
 
 use windows::{
-    core::{Result, PCWSTR, PWSTR},
+    core::{Result, PCWSTR},
     Win32::{
         Foundation::{ERROR_BUFFER_OVERFLOW, E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, MAX_PATH},
         Storage::FileSystem::{
@@ -97,6 +97,7 @@ impl<'a> Builder<'a> {
     ///         buf.len() as u32,
     ///         &mut read_len,
     ///     )
+    ///     .ok()
     /// }
     /// .expect("read bytes");
     ///
@@ -154,29 +155,34 @@ impl<'a> Builder<'a> {
             return Err(E_INVALIDARG.into());
         }
 
-        const FILE_LEN: usize = (MAX_PATH + 1) as usize;
-        const DIR_LEN: usize = FILE_LEN - 14;
-        let mut dir = [0_u16; DIR_LEN];
-        let mut file = [0_u16; FILE_LEN];
-
         let stream = unsafe {
-            match GetTempPathW(dir.len() as u32, PWSTR(dir.as_mut_ptr())) {
-                len if len as usize > dir.len() => Result::Err(E_OUTOFMEMORY.into()),
+            const FILE_LEN: usize = MAX_PATH as usize;
+            const DIR_LEN: usize = FILE_LEN - 14;
+
+            let mut dir = [MaybeUninit::<u16>::uninit(); DIR_LEN];
+            let mut file = [MaybeUninit::<u16>::uninit(); FILE_LEN];
+
+            match GetTempPathW(
+                &mut *(std::ptr::slice_from_raw_parts_mut(dir.as_mut_ptr(), dir.len())
+                    as *mut [u16]),
+            ) as usize
+            {
+                0 => Err(windows::core::Error::from_win32()),
+                len if len >= dir.len() => E_OUTOFMEMORY.ok(),
                 _ => Ok(()),
             }?;
             match GetTempFileNameW(
-                PCWSTR(dir.as_ptr()),
+                PCWSTR(std::mem::transmute(dir.as_ptr())),
                 self.prefix,
                 0,
-                PWSTR(file.as_mut_ptr()),
+                &mut *(file.as_mut_ptr() as *mut [u16; FILE_LEN]),
             ) {
                 unique if unique == ERROR_BUFFER_OVERFLOW.0 => Result::Err(E_OUTOFMEMORY.into()),
                 0 => Result::Err(E_FAIL.into()),
                 _ => Ok(()),
             }?;
-
             SHCreateStreamOnFileEx(
-                PCWSTR(file.as_ptr()),
+                PCWSTR(std::mem::transmute(file.as_ptr())),
                 (STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE).0,
                 (FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE).0,
                 true,
@@ -186,7 +192,13 @@ impl<'a> Builder<'a> {
 
         if let Some(content) = self.content {
             unsafe {
-                stream.Write(std::mem::transmute(content.as_ptr()), content.len() as u32)?;
+                stream
+                    .Write(
+                        std::mem::transmute(content.as_ptr()),
+                        content.len() as u32,
+                        std::ptr::null_mut(),
+                    )
+                    .ok()?;
                 stream.Seek(0, STREAM_SEEK_SET)?;
             }
         }
@@ -226,6 +238,7 @@ mod tests {
                 &mut read_len,
             )
         }
+        .ok()
         .expect("read bytes");
         assert_eq!(read_len as usize, text.len());
         assert_eq!(text, &buf[0..text.len()]);
@@ -239,22 +252,35 @@ mod tests {
             .build()
             .expect("create tempfile")
             .into();
-        let write_len = unsafe { stream.Write(mem::transmute(text.as_ptr()), text.len() as u32) }
-            .expect("write bytes") as usize;
+        let write_len = unsafe {
+            let mut write_len = mem::MaybeUninit::uninit();
+            stream
+                .Write(
+                    mem::transmute(text.as_ptr()),
+                    text.len() as u32,
+                    write_len.as_mut_ptr(),
+                )
+                .ok()
+                .expect("write bytes");
+            write_len.assume_init() as usize
+        };
         assert_eq!(write_len, text.len());
         unsafe { stream.Seek(0, STREAM_SEEK_SET) }.expect("seek to beginning");
         let mut buf = Vec::new();
         buf.resize(write_len + 1, 0_u8);
-        let mut read_len = 0;
-        unsafe {
-            stream.Read(
-                mem::transmute(buf.as_mut_ptr()),
-                buf.len() as u32,
-                &mut read_len,
-            )
-        }
-        .expect("read bytes");
-        assert_eq!(read_len as usize, write_len);
+        let read_len = unsafe {
+            let mut read_len = mem::MaybeUninit::uninit();
+            stream
+                .Read(
+                    mem::transmute(buf.as_mut_ptr()),
+                    buf.len() as u32,
+                    read_len.as_mut_ptr(),
+                )
+                .ok()
+                .expect("read bytes");
+            read_len.assume_init() as usize
+        };
+        assert_eq!(read_len, write_len);
         assert_eq!(text, &buf[0..write_len]);
         assert_eq!(0, buf[write_len]);
     }

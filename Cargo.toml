@@ -1,6 +1,6 @@
 [package]
 name = "tempfile-istream"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 description = "COM IStream on an exclusive temp file which is deleted on release"
 repository = "https://github.com/wravery/tempfile-istream"
@@ -17,7 +17,7 @@ targets = [
 ]
 
 [dependencies.windows]
-version = "0.33.0"
+version = "0.37.0"
 features = [
     "alloc",
     "Win32_Foundation",
